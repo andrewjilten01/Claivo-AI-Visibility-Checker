@@ -1,0 +1,688 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AI Search Visibility · Claivo</title>
+<meta name="description" content="Which local businesses Google Gemini recommends for real buyer questions, with live web search vs. from memory. Updated automatically by an n8n workflow.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=Space+Grotesk:wght@300..700&display=swap">
+<style>
+  :root { --cds-dur-slow: 240ms; --cds-ease-out: cubic-bezier(0.2, 0, 0, 1); }
+  html, body { margin: 0; background: #F7F3EF; }
+  .av-top-right { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
+</style>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/d3/7.9.0/d3.min.js"></script>
+<script>
+  // Small stand-in for the dashboard runtime: calcs register here, site loader fills the data.
+  window.dash = {
+    _calcs: [], _store: {}, _fn: null,
+    calc(name, def) { this._calcs.push([name, def]); },
+    data(name) { return this._store[name] || { status: 'loading' }; },
+    onData(fn) { this._fn = fn; },
+  };
+</script>
+</head>
+<body>
+<style>
+  /* Claivo design system (Search Visibility Summary template): Ink + Paper carry the page,
+     Clay is the single accent (the key stat), Stone for labels. Space Grotesk + IBM Plex Mono.
+     Layout: top bar, title, KPI cards, filters, expandable table, sources card, footnote. */
+  .av {
+    --clr-ink: #231F1D; --clr-clay: #C97C5D; --clr-sand: #D9A88F; --clr-paper: #F7F3EF; --clr-stone: #9C9088; --clr-white: #FFFFFF;
+    --text-secondary: rgba(35, 31, 29, 0.55); --text-sub: rgba(35, 31, 29, 0.6);
+    --border-subtle: rgba(35, 31, 29, 0.08); --border-default: rgba(35, 31, 29, 0.16);
+    --surface-sunken: #FBF9F7; --row-hover: rgba(201, 124, 93, 0.06);
+    --status-success: #5E8C61; --status-warning: #C9A24A; --status-danger: #B5544A;
+    --font-display: 'Space Grotesk', system-ui, sans-serif; --font-mono: 'IBM Plex Mono', ui-monospace, monospace;
+    color-scheme: light;
+    background: var(--clr-paper); color: var(--clr-ink); font-family: var(--font-display);
+    max-width: 1200px; margin-inline: auto; padding: 40px 24px 64px; border-radius: 6px;
+    display: flex; flex-direction: column; gap: 24px;
+  }
+  .av-top { display: flex; justify-content: space-between; align-items: center; gap: 16px; flex-wrap: wrap; }
+  .av-brand { display: flex; align-items: center; gap: 16px; }
+  .av-word { font-family: var(--font-display); font-weight: 600; font-size: 26px; letter-spacing: -0.02em; line-height: 1; display: inline-flex; align-items: center; gap: 3px; }
+  .av-word i { display: inline-block; width: 3px; height: 22px; background: var(--clr-clay); border-radius: 1px; }
+  .av-badge { font-family: var(--font-mono); font-weight: 600; font-size: 10.5px; letter-spacing: 0.12em; text-transform: uppercase; line-height: 1; padding: 6px 8px; border-radius: 4px; border: 1px solid var(--border-default); color: var(--text-secondary); white-space: nowrap; }
+  .av-badge.av-danger { color: var(--status-danger); border-color: rgba(181, 84, 74, 0.35); background: rgba(181, 84, 74, 0.06); }
+  .av-badge.av-warning { color: #8f7330; border-color: rgba(201, 162, 74, 0.45); background: rgba(201, 162, 74, 0.08); }
+  .av-badge.av-success { color: var(--status-success); border-color: rgba(94, 140, 97, 0.4); background: rgba(94, 140, 97, 0.07); }
+  .av-label { font-family: var(--font-mono); font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--clr-stone); }
+  .av-run { display: flex; align-items: center; gap: 8px; }
+  .av-run-select { width: auto; min-width: 230px; }
+  .av-select:disabled { cursor: default; opacity: 1; }
+  .av-h1 { font-size: 32px; line-height: 1.15; letter-spacing: -0.01em; font-weight: 600; margin: 0 0 4px; text-wrap: balance; }
+  .av-sub { font-size: 15px; color: var(--text-sub); margin: 0; }
+  .av-kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 180px), 1fr)); gap: 16px; }
+  .av-kpi { display: flex; flex-direction: column; gap: 8px; background: var(--clr-white); border: 1px solid var(--border-subtle); border-radius: 6px; padding: 16px; min-width: 0; }
+  .av-kpi-val { font-family: var(--font-mono); font-size: 28px; font-weight: 500; line-height: 1.1; font-variant-numeric: tabular-nums; }
+  .av-kpi-val.av-accent { color: var(--clr-clay); }
+  .av-kpi-note { font-size: 12px; color: var(--text-secondary); }
+  .av-kpi-delta { font-size: 12px; color: var(--text-secondary); min-height: 1.2em; }
+  .av-delta { font-family: var(--font-mono); font-size: 11px; font-weight: 500; color: var(--text-secondary); font-variant-numeric: tabular-nums; }
+  .av-delta.av-up { color: var(--status-success); }
+  .av-delta.av-down { color: var(--status-danger); }
+  .av-cell { display: flex; align-items: baseline; justify-content: flex-end; gap: 6px; }
+  .av-cell .av-delta { min-width: 2ch; text-align: left; }
+  .av-filters { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 200px), 1fr)); gap: 16px; align-items: end; }
+  .av-filters label { display: flex; flex-direction: column; gap: 8px; }
+  .av-select { appearance: none; -webkit-appearance: none; height: 42px; width: 100%; padding: 0 36px 0 12px; border: 1px solid var(--border-default); border-radius: 6px; background-color: var(--clr-white); color: var(--clr-ink); font: 400 15px/1 var(--font-display); cursor: pointer;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath d='M1 1.5l5 5 5-5' fill='none' stroke='%239C9088' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+    background-repeat: no-repeat; background-position: right 12px center; }
+  .av-select:hover { border-color: rgba(35, 31, 29, 0.3); }
+  .av-select:focus-visible, .av-row:focus-visible { outline: 2px solid var(--clr-clay); outline-offset: 2px; }
+  .av-card { background: var(--clr-white); border: 1px solid var(--border-subtle); border-radius: 6px; min-width: 0; }
+  .av-scroll { overflow-x: auto; }
+  .av-grid { display: grid; grid-template-columns: minmax(0, 2.4fr) repeat(4, minmax(0, 1fr)) minmax(0, 1.1fr); gap: 16px; align-items: center; }
+  .av-thead { min-width: 820px; padding: 12px 24px; border-bottom: 1px solid var(--border-default); }
+  .av-thead span { font-family: var(--font-mono); font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--clr-stone); }
+  .av-r { text-align: right; justify-self: end; }
+  .av-tbody { min-width: 820px; min-height: 12rem; }
+  .av-row { padding: 16px 24px; border-bottom: 1px solid var(--border-subtle); cursor: pointer; font-size: 14px; transition: background var(--cds-dur-slow); }
+  .av-row:hover { background: var(--row-hover); }
+  .av-row[aria-expanded="true"] { background: var(--row-hover); }
+  .av-pcell { display: flex; align-items: flex-start; gap: 10px; min-width: 0; }
+  .av-chev { flex: none; margin-top: 5px; width: 7px; height: 7px; border-right: 1.5px solid var(--clr-stone); border-bottom: 1.5px solid var(--clr-stone); transform: rotate(-45deg); transition: transform 200ms cubic-bezier(0.2, 0, 0, 1); }
+  .av-row[aria-expanded="true"] .av-chev { transform: rotate(45deg); }
+  .av-ptext { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+  .av-pname { font-weight: 500; }
+  .av-pmeta { font-size: 12px; color: var(--text-secondary); }
+  .av-num { font-family: var(--font-mono); font-weight: 500; font-variant-numeric: tabular-nums; }
+  .av-num.av-zero { color: var(--status-danger); }
+  .av-detail { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr)); gap: 24px; padding: 16px 24px 24px 41px; background: var(--surface-sunken); border-bottom: 1px solid var(--border-subtle); font-size: 14px; line-height: 1.55; }
+  .av-dcol { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+  .av-dlist { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+  .av-dlist li { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px; }
+  .av-pos { font-family: var(--font-mono); font-size: 11px; color: var(--clr-stone); min-width: 1.4em; }
+  .av-dlist li.av-li-num { display: grid; grid-template-columns: 1.6em minmax(0, 1fr); column-gap: 8px; align-items: baseline; }
+  .av-item { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 8px; min-width: 0; }
+  .av-bname { overflow-wrap: anywhere; }
+  .av-flag { font-family: var(--font-mono); font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--status-danger); }
+  .av-flag.av-both { color: var(--status-success); }
+  .av-flag.av-new { color: var(--clr-ink); background: rgba(35, 31, 29, 0.06); padding: 2px 5px; border-radius: 4px; }
+  .av-dropped { margin: 4px 0 0; display: flex; flex-wrap: wrap; gap: 4px 10px; align-items: baseline; font-size: 13px; color: var(--text-secondary); }
+  .av-dropped .av-label { width: 100%; }
+  .av-site { font-family: var(--font-mono); font-size: 13px; }
+  .av-empty { padding: 40px 24px; text-align: center; color: var(--text-secondary); font-size: 14px; }
+  .av-sources { padding: 24px; display: flex; flex-direction: column; gap: 16px; }
+  .av-h2 { font-size: 20px; line-height: 1.3; font-weight: 600; margin: 0; }
+  .av-note { font-size: 14px; color: var(--text-secondary); margin: 0; }
+  .av-legend { display: flex; flex-wrap: wrap; gap: 16px; }
+  .av-legend span { display: inline-flex; align-items: center; gap: 6px; font-family: var(--font-mono); font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--clr-stone); }
+  .av-sw { width: 10px; height: 10px; border-radius: 2px; display: inline-block; }
+  .av-chart { position: relative; min-height: 12rem; }
+  .av-chart svg { display: block; }
+  .av-tip { position: absolute; pointer-events: none; background: var(--clr-white); border: 1px solid var(--border-default); border-radius: 6px; box-shadow: 0 4px 16px rgba(35, 31, 29, 0.10); padding: 6px 10px; font-size: 12px; white-space: nowrap; color: var(--clr-ink); }
+  .av-tip-k { font-family: var(--font-mono); font-size: 11px; color: var(--clr-stone); }
+  .av-foot { font-size: 12px; line-height: 1.55; color: var(--text-secondary); margin: 0; max-width: 60rem; }
+  .av-failed { display: flex; align-items: center; justify-content: center; gap: 8px; color: var(--text-secondary); font-size: 12px; min-height: 4rem; }
+  .av-failed::before { content: ""; width: .375rem; height: .375rem; border-radius: 50%; background: var(--status-danger); }
+  [data-dash-source-state=empty] { color: transparent; }
+  [data-dash-source-state=refreshing] { opacity: .5; transition: opacity var(--cds-dur-slow); }
+  @media (max-width: 520px) { .av { padding: 24px 16px 40px; } .av-h1 { font-size: 26px; } }
+  @media (prefers-reduced-motion: reduce) { .av-chev, .av-row { transition: none; } }
+  @media (prefers-reduced-motion: no-preference) {
+    .av-detail { animation: av-in 200ms cubic-bezier(0.2, 0, 0, 1) both; }
+    @keyframes av-in { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: none; } }
+    .av-bar { animation: av-grow var(--cds-dur-slow) var(--cds-ease-out) both; transform-origin: left center; transform-box: fill-box; }
+    @keyframes av-grow { from { transform: scaleX(0); } to { transform: scaleX(1); } }
+  }
+</style>
+
+<div class="av">
+  <div class="av-top">
+    <div class="av-brand">
+      <span class="av-word" aria-label="claivo">claivo<i aria-hidden="true"></i></span>
+      <span class="av-badge">Portfolio demo</span>
+    </div>
+    <div class="av-top-right">
+    <span class="av-label" id="updated"></span>
+    <label class="av-run" for="f-run">
+      <span class="av-label">Run</span>
+      <select class="av-select av-run-select" id="f-run"></select>
+    </label>
+    </div>
+  </div>
+
+  <div>
+    <h1 class="av-h1" id="title">AI search visibility</h1>
+    <p class="av-sub">Burlington, Iowa · Gemini answering with live web search vs. from memory</p>
+  </div>
+
+  <div class="av-kpis" id="headline">
+    <div class="av-kpi">
+      <span class="av-label">Named from memory</span>
+      <span class="av-kpi-val dash-skeleton" data-kpi="memory_businesses">—</span>
+      <span class="av-kpi-note">Gemini with no web access</span>
+      <span class="av-kpi-delta" data-kpi-delta="memory_businesses"></span>
+    </div>
+    <div class="av-kpi">
+      <span class="av-label">Also found live</span>
+      <span class="av-kpi-val av-accent dash-skeleton" data-kpi="shared">—</span>
+      <span class="av-kpi-note">Same name, same category</span>
+      <span class="av-kpi-delta" data-kpi-delta="shared"></span>
+    </div>
+    <div class="av-kpi">
+      <span class="av-label">Found with live search</span>
+      <span class="av-kpi-val dash-skeleton" data-kpi="live_businesses">—</span>
+      <span class="av-kpi-note">Answered from web results</span>
+      <span class="av-kpi-delta" data-kpi-delta="live_businesses"></span>
+    </div>
+    <div class="av-kpi">
+      <span class="av-label">Buyer prompts</span>
+      <span class="av-kpi-val dash-skeleton" data-kpi="prompts">—</span>
+      <span class="av-kpi-note">Each asked both ways</span>
+      <span class="av-kpi-delta">&nbsp;</span>
+    </div>
+  </div>
+
+  <div class="av-filters">
+    <label for="f-category">
+      <span class="av-label">Category</span>
+      <select class="av-select" id="f-category"><option value="all">All categories</option></select>
+    </label>
+    <label for="f-status">
+      <span class="av-label">Status</span>
+      <select class="av-select" id="f-status">
+        <option value="all">All statuses</option>
+        <option value="No overlap">No overlap</option>
+        <option value="Partial">Partial</option>
+        <option value="Match">Match</option>
+      </select>
+    </label>
+    <label for="f-sort">
+      <span class="av-label">Sort by</span>
+      <select class="av-select" id="f-sort">
+        <option value="order">Prompt order</option>
+        <option value="memory">Most named from memory</option>
+        <option value="live">Most found live</option>
+        <option value="sites">Most sites cited</option>
+      </select>
+    </label>
+  </div>
+
+  <div class="av-card av-scroll" id="prompts">
+    <div class="av-grid av-thead" aria-hidden="true">
+      <span>Buyer prompt</span>
+      <span class="av-r">Live search</span>
+      <span class="av-r">From memory</span>
+      <span class="av-r">In both</span>
+      <span class="av-r">Sites cited</span>
+      <span class="av-r">Status</span>
+    </div>
+    <div class="av-tbody dash-skeleton" id="rows" data-source="prompt_rows"></div>
+  </div>
+
+  <div class="av-card av-sources" id="sources-card">
+    <div>
+      <h2 class="av-h2">Sites the live answers cited</h2>
+      <p class="av-note">How many answers cited each site. Directories shape which businesses AI recommends.</p>
+    </div>
+    <div class="av-legend" id="sources-legend" data-source="top_sources"></div>
+    <div class="av-chart dash-skeleton" id="sources-chart" data-source="top_sources"></div>
+  </div>
+
+  <p class="av-foot" id="method">Live search: Tavily web results passed to Gemini, which answers and cites them by number. From memory: the same question with no web access. A second Gemini call with a fixed JSON schema lists every business each answer names, leaving out directories like Yelp. Names count as in both when they refer to the same business within a category, allowing for small wording differences (“Cray Law PLC” and “Cray Law Firm, PLC” count as one). Choose a run at the top to see it on its own; small numbers next to each count show the change from the previous run of that prompt. Click a prompt to see every business named, what is new this run and what dropped out. A name missing from search results is not proof the business doesn't exist.</p>
+</div>
+
+<script>
+(function () {
+  window.avEnc = (v) => String(v).replace(/%/g, '%25').replace(/&/g, '%26').replace(/=/g, '%3D');
+
+  dash.calc('kpis', {
+    title: 'Headline counts per run',
+    description: 'For each run: unique businesses per engine, how many memory names also appear in live answers for the same category, and the change from the previous run.',
+    inputs: ['mentions', 'answers'],
+    fn: (mentions, answers) => {
+      const norm = (s) => String(s).toLowerCase().replace(/&/g, ' ').replace(/[^a-z0-9 ]/g, ' ')
+        .split(/\s+/).filter((w) => w && !['the', 'and', 'of', 'clinic', 'center', 'office', 'pc', 'plc', 'llp', 'lllp', 'llc', 'firm'].includes(w)).join(' ');
+      const runs = [...new Set(answers.map((a) => a.run_id))].sort();
+      const rows = runs.map((run) => {
+        const ms = mentions.filter((m) => m.run_id === run);
+        const keys = (engine) => new Set(ms.filter((m) => m.engine === engine).map((m) => m.category + '|' + (m.key || norm(m.business))));
+        const live = keys('Live search');
+        const memory = keys('Memory only');
+        return {
+          run_id: run,
+          prompts: new Set(answers.filter((a) => a.run_id === run).map((a) => a.prompt_id)).size,
+          live_businesses: live.size,
+          memory_businesses: memory.size,
+          shared: [...memory].filter((k) => live.has(k)).length,
+        };
+      });
+      return rows.map((r, i) => {
+        const p = rows[i - 1];
+        return {
+          ...r,
+          previous_run: p ? p.run_id : null,
+          live_change: p ? r.live_businesses - p.live_businesses : null,
+          memory_change: p ? r.memory_businesses - p.memory_businesses : null,
+          shared_change: p ? r.shared - p.shared : null,
+        };
+      });
+    },
+  });
+
+  dash.calc('prompt_rows', {
+    title: 'Results per prompt and run',
+    description: 'For each run and buyer prompt: businesses named with live search and from memory, how many memory names also appear live in the same category, sites cited, and the change from the previous run of that prompt.',
+    inputs: ['mentions', 'sources', 'answers'],
+    fn: (mentions, sources, answers) => {
+      const norm = (s) => String(s).toLowerCase().replace(/&/g, ' ').replace(/[^a-z0-9 ]/g, ' ')
+        .split(/\s+/).filter((w) => w && !['the', 'and', 'of', 'clinic', 'center', 'office', 'pc', 'plc', 'llp', 'lllp', 'llc', 'firm'].includes(w)).join(' ');
+      const runs = [...new Set(answers.map((a) => a.run_id))].sort();
+      const order = [];
+      for (const a of answers) if (!order.includes(a.prompt_id)) order.push(a.prompt_id);
+      const out = [];
+      const last = new Map();
+      for (const run of runs) {
+        const ids = order.filter((id) => answers.some((a) => a.run_id === run && a.prompt_id === id));
+        for (const id of ids) {
+          const a = answers.find((x) => x.run_id === run && x.prompt_id === id);
+          const ms = mentions.filter((m) => m.run_id === run);
+          const live = new Set(ms.filter((m) => m.prompt_id === id && m.engine === 'Live search').map((m) => (m.key || norm(m.business))));
+          const memory = new Set(ms.filter((m) => m.prompt_id === id && m.engine === 'Memory only').map((m) => (m.key || norm(m.business))));
+          const liveCategory = new Set(ms.filter((m) => m.category === a.category && m.engine === 'Live search').map((m) => (m.key || norm(m.business))));
+          const shared = [...memory].filter((k) => liveCategory.has(k)).length;
+          const row = {
+            run_id: run, prompt_id: id, order: order.indexOf(id) + 1, prompt: a.prompt, category: a.category,
+            live_named: live.size, memory_named: memory.size, in_both: shared,
+            sites_cited: new Set(sources.filter((s) => s.run_id === run && s.prompt_id === id).map((s) => s.domain)).size,
+            status: memory.size === 0 ? 'Match' : shared === 0 ? 'No overlap' : shared === memory.size ? 'Match' : 'Partial',
+          };
+          const p = last.get(id);
+          row.previous_run = p ? p.run_id : null;
+          for (const f of ['live_named', 'memory_named', 'in_both', 'sites_cited']) row[f + '_change'] = p ? row[f] - p[f] : null;
+          last.set(id, row);
+          out.push(row);
+        }
+      }
+      return out;
+    },
+  });
+
+  dash.calc('top_sources', {
+    title: 'Most-cited sites per run',
+    description: 'For each run, how many live-search answers cited each site, marking well-known directories.',
+    inputs: ['sources'],
+    fn: (sources) => {
+      const directories = ['yelp.com', 'healthgrades.com', 'facebook.com', 'justia.com', 'deltadental.com', 'avvo.com', 'google.com'];
+      const counts = d3.rollups(sources, (v) => new Set(v.map((s) => s.prompt_id)).size, (s) => s.run_id, (s) => s.domain);
+      return counts.flatMap(([run_id, domains]) => domains.map(([domain, citations]) => ({
+        run_id, domain, citations, type: directories.includes(domain) ? 'Directory' : 'Business site',
+      }))).sort((a, b) => a.run_id.localeCompare(b.run_id) || b.citations - a.citations || a.domain.localeCompare(b.domain));
+    },
+  });
+})();
+</script>
+
+<script>
+(function () {
+  const enc = window.avEnc;
+  const fmt = d3.format(',');
+  const dateFmt = d3.utcFormat('%b %-d, %Y');
+  const TONE = { 'No overlap': 'av-danger', 'Partial': 'av-warning', 'Match': 'av-success' };
+  const NORM_DROP = ['the', 'and', 'of', 'clinic', 'center', 'office', 'pc', 'plc', 'llp', 'lllp', 'llc', 'firm'];
+  const norm = (s) => String(s).toLowerCase().replace(/&/g, ' ').replace(/[^a-z0-9 ]/g, ' ').split(/\s+/).filter((w) => w && !NORM_DROP.includes(w)).join(' ');
+  const state = { run: null, category: 'all', status: 'all', sort: 'order', open: new Set() };
+  let animated = false;
+
+  const el = (tag, cls, text) => { const n = document.createElement(tag); if (cls) n.className = cls; if (text !== undefined) n.textContent = text; return n; };
+  const mark = (n, source, field, where) => { n.setAttribute('data-source', source); n.setAttribute('data-field', field); if (where) n.setAttribute('data-where', where); return n; };
+  const failed = (box) => { box.textContent = ''; box.classList.remove('dash-skeleton'); box.appendChild(el('div', 'av-failed', 'Failed to load')); };
+
+  // "2026-10-17 06:50" -> "Oct 17, 2026 · 6:50 AM"; a date-only id (older rows) -> "Oct 10, 2026"
+  function runLabel(id) {
+    const d = new Date(String(id).slice(0, 10));
+    let s = dateFmt(d);
+    const t = /(\d{2}):(\d{2})/.exec(String(id).slice(10));
+    if (t) { const h = Number(t[1]); s += ` · ${((h + 11) % 12) + 1}:${t[2]} ${h < 12 ? 'AM' : 'PM'}`; }
+    return s;
+  }
+  // Change marker: the number is the data value; color says better/worse only where direction has a meaning.
+  function delta(value, field, where, source, good) {
+    const s = el('span', 'av-delta');
+    if (value === null || value === undefined) return s;
+    s.textContent = value > 0 ? `+${fmt(value)}` : fmt(value);
+    if (good && value > 0) s.classList.add('av-up');
+    if (good && value < 0) s.classList.add('av-down');
+    return mark(s, source, field, where);
+  }
+
+  function runs() {
+    const a = dash.data('answers');
+    if (a.status !== 'ok') return [];
+    return [...new Set(a.data.map((x) => x.run_id))].sort().reverse();
+  }
+
+  function drawRunSelect() {
+    const sel = document.getElementById('f-run');
+    const list = runs();
+    if (!list.length) return;
+    if (!state.run || !list.includes(state.run)) state.run = list[0];
+    const want = list.join('|');
+    if (sel.dataset.runs !== want) {
+      sel.textContent = '';
+      list.forEach((id, i) => sel.appendChild(new Option(runLabel(id) + (i === 0 ? ' (latest)' : ''), id)));
+      sel.dataset.runs = want;
+    }
+    sel.value = state.run;
+    sel.disabled = list.length < 2;
+  }
+
+  function drawHeadline() {
+    const k = dash.data('kpis');
+    if (k.status !== 'ok') return;
+    const r = k.data.find((x) => x.run_id === state.run);
+    if (!r) return;
+    const where = `run_id=${enc(r.run_id)}`;
+    for (const f of ['memory_businesses', 'shared', 'live_businesses', 'prompts']) {
+      const n = document.querySelector(`.av-kpi [data-kpi="${f}"]`);
+      mark(n, 'kpis', f, where);
+      n.textContent = fmt(r[f]);
+      n.classList.remove('dash-skeleton');
+    }
+    const changes = { memory_businesses: ['memory_change', false], shared: ['shared_change', true], live_businesses: ['live_change', false] };
+    for (const [f, [cf, good]] of Object.entries(changes)) {
+      const slot = document.querySelector(`.av-kpi [data-kpi-delta="${f}"]`);
+      slot.textContent = '';
+      if (r.previous_run) {
+        slot.appendChild(delta(r[cf], cf, where, 'kpis', good));
+        slot.appendChild(document.createTextNode(` vs ${runLabel(r.previous_run)}`));
+      } else {
+        slot.textContent = 'First run';
+      }
+    }
+  }
+
+  function fillCategories(rows) {
+    const sel = document.getElementById('f-category');
+    const have = new Set([...sel.options].map((o) => o.value));
+    for (const c of [...new Set(rows.map((r) => r.category))]) if (!have.has(c)) sel.appendChild(new Option(c, c));
+  }
+
+  function detail(r, mentions, sources) {
+    const box = el('div', 'av-detail');
+    box.id = `detail-${r.prompt_id}`;
+    const ms = mentions.filter((m) => m.run_id === r.run_id);
+    const prev = r.previous_run ? mentions.filter((m) => m.run_id === r.previous_run && m.prompt_id === r.prompt_id) : null;
+    const liveKeys = new Set(ms.filter((m) => m.category === r.category && m.engine === 'Live search').map((m) => (m.key || norm(m.business))));
+    const memKeys = new Set(ms.filter((m) => m.category === r.category && m.engine === 'Memory only').map((m) => (m.key || norm(m.business))));
+    const col = (title, items, render, dropped) => {
+      const c = el('div', 'av-dcol');
+      c.appendChild(el('span', 'av-label', title));
+      const ul = el('ul', 'av-dlist');
+      if (items.length === 0) ul.appendChild(el('li', 'av-pmeta', 'None'));
+      items.forEach((it) => ul.appendChild(render(it)));
+      c.appendChild(ul);
+      if (dropped && dropped.length) {
+        const d = el('p', 'av-dropped');
+        d.appendChild(el('span', 'av-label', 'No longer named'));
+        dropped.forEach((m) => d.appendChild(mark(el('s', null, m.business), 'mentions', 'business',
+          `run_id=${enc(m.run_id)}&prompt_id=${enc(m.prompt_id)}&engine=${enc(m.engine)}&position=${enc(m.position)}`)));
+        c.appendChild(d);
+      }
+      return c;
+    };
+    const named = (engine, otherKeys, otherLabel, missLabel) => {
+      const before = prev ? new Set(prev.filter((m) => m.engine === engine).map((m) => (m.key || norm(m.business)))) : null;
+      return (m) => {
+        // Number in its own column; the name and its tags wrap together beside it.
+        const li = el('li', 'av-li-num');
+        li.appendChild(el('span', 'av-pos', String(m.position)));
+        const item = el('span', 'av-item');
+        item.appendChild(mark(el('span', 'av-bname', m.business), 'mentions', 'business',
+          `run_id=${enc(m.run_id)}&prompt_id=${enc(m.prompt_id)}&engine=${enc(m.engine)}&position=${enc(m.position)}`));
+        if (before && !before.has((m.key || norm(m.business)))) item.appendChild(el('span', 'av-flag av-new', 'new this run'));
+        if (otherKeys.has((m.key || norm(m.business)))) item.appendChild(el('span', 'av-flag av-both', otherLabel));
+        else if (missLabel) item.appendChild(el('span', 'av-flag', missLabel));
+        li.appendChild(item);
+        return li;
+      };
+    };
+    const items = (engine) => ms.filter((m) => m.prompt_id === r.prompt_id && m.engine === engine).sort((a, b) => a.position - b.position);
+    const dropped = (engine) => {
+      if (!prev) return [];
+      const now = new Set(items(engine).map((m) => (m.key || norm(m.business))));
+      return prev.filter((m) => m.engine === engine && !now.has((m.key || norm(m.business)))).sort((a, b) => a.position - b.position);
+    };
+    const siteItems = [...new Set(sources.filter((s) => s.run_id === r.run_id && s.prompt_id === r.prompt_id).map((s) => s.domain))];
+    box.appendChild(col('Named with live search', items('Live search'), named('Live search', memKeys, 'also from memory', null), dropped('Live search')));
+    box.appendChild(col('Named from memory', items('Memory only'), named('Memory only', liveKeys, 'found live', 'not found live'), dropped('Memory only')));
+    box.appendChild(col('Sites cited', siteItems, (d) => {
+      const li = el('li');
+      li.appendChild(mark(el('span', 'av-site', d), 'sources', 'domain', `run_id=${enc(r.run_id)}&prompt_id=${enc(r.prompt_id)}&domain=${enc(d)}`));
+      return li;
+    }));
+    return box;
+  }
+
+  function drawRows() {
+    const box = document.getElementById('rows');
+    const p = dash.data('prompt_rows');
+    const mentions = dash.data('mentions');
+    const sources = dash.data('sources');
+    box.textContent = '';
+    if ([p, mentions, sources, dash.data('answers')].some((d) => d.status === 'error')) { failed(box); return; }
+    if (p.status !== 'ok' || mentions.status !== 'ok' || sources.status !== 'ok' || !state.run) { box.classList.add('dash-skeleton'); return; }
+    box.classList.remove('dash-skeleton');
+    const inRun = p.data.filter((r) => r.run_id === state.run);
+    fillCategories(inRun);
+    let rows = inRun.filter((r) => (state.category === 'all' || r.category === state.category) && (state.status === 'all' || r.status === state.status));
+    const sorters = {
+      order: (a, b) => a.order - b.order,
+      memory: (a, b) => b.memory_named - a.memory_named || a.order - b.order,
+      live: (a, b) => b.live_named - a.live_named || a.order - b.order,
+      sites: (a, b) => b.sites_cited - a.sites_cited || a.order - b.order,
+    };
+    rows = [...rows].sort(sorters[state.sort]);
+    if (rows.length === 0) { box.appendChild(el('div', 'av-empty', 'No prompts match these filters.')); return; }
+    for (const r of rows) {
+      const where = `run_id=${enc(r.run_id)}&prompt_id=${enc(r.prompt_id)}`;
+      const open = state.open.has(r.prompt_id);
+      const row = el('div', 'av-grid av-row');
+      row.setAttribute('role', 'button');
+      row.setAttribute('tabindex', '0');
+      row.setAttribute('aria-expanded', String(open));
+      row.setAttribute('aria-controls', `detail-${r.prompt_id}`);
+      const pc = el('div', 'av-pcell');
+      pc.appendChild(el('span', 'av-chev'));
+      const pt = el('div', 'av-ptext');
+      pt.appendChild(mark(el('span', 'av-pname', r.prompt), 'prompt_rows', 'prompt', where));
+      const meta = el('span', 'av-pmeta');
+      meta.appendChild(mark(el('span', null, r.category), 'prompt_rows', 'category', where));
+      pt.appendChild(meta);
+      pc.appendChild(pt);
+      row.appendChild(pc);
+      for (const f of ['live_named', 'memory_named', 'in_both', 'sites_cited']) {
+        const cell = el('div', 'av-cell av-r');
+        const n = mark(el('span', 'av-num', fmt(r[f])), 'prompt_rows', f, where);
+        if (f === 'in_both' && r[f] === 0 && r.memory_named > 0) n.classList.add('av-zero');
+        cell.appendChild(n);
+        cell.appendChild(delta(r[f + '_change'], f + '_change', where, 'prompt_rows', f === 'in_both'));
+        row.appendChild(cell);
+      }
+      const st = el('div', 'av-r');
+      st.appendChild(mark(el('span', `av-badge ${TONE[r.status] || ''}`, r.status), 'prompt_rows', 'status', where));
+      row.appendChild(st);
+      const toggle = () => { if (state.open.has(r.prompt_id)) state.open.delete(r.prompt_id); else state.open.add(r.prompt_id); drawRows(); };
+      row.addEventListener('click', toggle);
+      row.addEventListener('keydown', (ev) => { if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); toggle(); } });
+      box.appendChild(row);
+      if (open) box.appendChild(detail(r, mentions.data, sources.data));
+    }
+  }
+
+  function drawSources() {
+    const box = document.getElementById('sources-chart');
+    const legend = document.getElementById('sources-legend');
+    const s = dash.data('top_sources');
+    box.textContent = ''; legend.textContent = '';
+    if (s.status === 'error' || dash.data('sources').status === 'error') { failed(box); return; }
+    if (s.status !== 'ok' || !state.run) { box.classList.add('dash-skeleton'); return; }
+    box.classList.remove('dash-skeleton');
+    const rows = s.data.filter((r) => r.run_id === state.run);
+    const colorOf = (t) => (t === 'Directory' ? 'var(--clr-stone)' : 'var(--clr-ink)');
+    for (const t of ['Business site', 'Directory']) {
+      const span = el('span');
+      const sw = el('span', 'av-sw'); sw.style.background = colorOf(t);
+      span.appendChild(sw); span.appendChild(document.createTextNode(t)); legend.appendChild(span);
+    }
+    if (!rows.length) { box.appendChild(el('div', 'av-empty', 'No sites cited in this run.')); return; }
+    const width = Math.max(280, box.clientWidth || 600);
+    const barH = 12, gap = 14;
+    const height = rows.length * (barH + gap) + 4;
+    const svg = d3.select(box).append('svg').attr('width', '100%').attr('viewBox', `0 0 ${width} ${height}`).attr('role', 'img').attr('aria-label', 'Sites cited by live-search answers');
+    const probe = svg.append('text').attr('font-size', 12).style('font-family', 'var(--font-mono)');
+    let labelW = 0, valueW = 0;
+    for (const r of rows) {
+      probe.text(r.domain); labelW = Math.max(labelW, probe.node().getComputedTextLength());
+      probe.text(fmt(r.citations)); valueW = Math.max(valueW, probe.node().getComputedTextLength());
+    }
+    labelW = Math.min(labelW, width * 0.42);
+    // Shorten site names that don't fit the label column (narrow screens).
+    const fit = (t) => {
+      probe.text(t); if (probe.node().getComputedTextLength() <= labelW) return t;
+      let s = t; while (s.length > 4) { s = s.slice(0, -1); probe.text(s + '…'); if (probe.node().getComputedTextLength() <= labelW) break; }
+      return s + '…';
+    };
+    const shown = new Map(rows.map((r) => [r.domain, fit(r.domain)]));
+    probe.remove();
+    const left = labelW + 12, right = valueW + 10;
+    const x = d3.scaleLinear([0, d3.max(rows, (r) => r.citations) || 1], [0, Math.max(10, width - left - right)]);
+    const tip = d3.select(box).append('div').attr('class', 'av-tip').style('opacity', 0);
+    const g = svg.selectAll('g.row').data(rows).join('g').attr('class', 'row').attr('transform', (r, i) => `translate(0,${i * (barH + gap) + 2})`);
+    g.append('text').attr('x', labelW).attr('y', barH / 2).attr('dy', '0.35em').attr('text-anchor', 'end')
+      .attr('font-size', 12).style('font-family', 'var(--font-mono)').style('fill', 'var(--clr-ink)').text((r) => shown.get(r.domain));
+    g.append('rect').attr('class', animated ? null : 'av-bar').attr('x', left).attr('y', 0).attr('height', barH).attr('rx', 3)
+      .attr('width', (r) => Math.max(2, x(r.citations))).style('fill', (r) => colorOf(r.type));
+    g.append('text').attr('x', (r) => left + Math.max(2, x(r.citations)) + 6).attr('y', barH / 2).attr('dy', '0.35em')
+      .attr('font-size', 12).style('font-family', 'var(--font-mono)').style('fill', 'var(--clr-stone)').text((r) => fmt(r.citations));
+    g.append('rect').attr('x', 0).attr('y', -gap / 2).attr('width', width).attr('height', barH + gap).style('fill', 'transparent')
+      .on('mousemove', (ev, r) => {
+        const [mx, my] = d3.pointer(ev, box);
+        tip.style('opacity', 1).text('');
+        tip.append('div').attr('class', 'av-tip-k').text(r.domain);
+        tip.append('div').text(`${r.type} · cited in ${fmt(r.citations)} ${r.citations === 1 ? 'answer' : 'answers'}`);
+        const tw = tip.node().offsetWidth;
+        tip.style('left', `${Math.min(Math.max(0, mx + 12), box.clientWidth - tw)}px`).style('top', `${my + 12}px`);
+      })
+      .on('mouseleave', () => tip.style('opacity', 0));
+    animated = true;
+  }
+
+  function drawAll() { drawRunSelect(); drawHeadline(); drawRows(); drawSources(); }
+
+  document.getElementById('f-run').addEventListener('change', (e) => { state.run = e.target.value; state.open.clear(); drawAll(); });
+  document.getElementById('f-category').addEventListener('change', (e) => { state.category = e.target.value; drawRows(); });
+  document.getElementById('f-status').addEventListener('change', (e) => { state.status = e.target.value; drawRows(); });
+  document.getElementById('f-sort').addEventListener('change', (e) => { state.sort = e.target.value; drawRows(); });
+
+  dash.onData(drawAll);
+})();
+</script>
+
+<script>
+(function () {
+  // Loads data.json (written by the n8n workflow after each run) and turns the raw
+  // Results rows into the tables the report draws from.
+  const ENGINES = { 'Gemini + web search (Tavily)': 'Live search', 'Gemini memory only': 'Memory only' };
+  // Category comes from the prompt's wording. Add a rule here when you add a new kind of business.
+  const CATEGORY_RULES = [
+    [/chiropract/, 'Chiropractors'],
+    [/lawyer|attorney|law firm|divorce/, 'Family & divorce lawyers'],
+    [/dentist|dental/, 'Dentists'],
+  ];
+  const words = (s) => s.split(/\s+/).filter(Boolean);
+  // Looser name matching: names that differ only by generic words ("Family", "Dentistry", "Law Firm",
+  // "PLC"...) or small spelling changes count as one business.
+  const GENERIC = new Set(words(`the and of a at in on dr dds dmd md pc plc llc llp lllp pllc inc co group
+    clinic center centre office offices practice care services associates firm law lawyer lawyers
+    attorney attorneys legal chiropractic chiropractor chiropractors spine wellness health
+    dental dentist dentists dentistry family general cosmetic orthodontics acupuncture auto injury`));
+  const PLACE = new Set(words('burlington iowa ia southeast se west north south east river city regional area'));
+  const SUFFIX = new Set(words('the and of a at in on pc plc llc llp lllp pllc inc co group clinic center centre office offices practice associates'));
+
+  const clean = (n) => words(String(n).toLowerCase().replace(/&/g, ' ').replace(/[^a-z0-9 ]/g, ' '));
+  function nameTokens(n) { const w = clean(n); const core = w.filter((x) => !GENERIC.has(x)); return core.length ? core : w; }
+  const sameWord = (a, b) => a === b || (Math.min(a.length, b.length) >= 5 && (a.startsWith(b) || b.startsWith(a)));
+  function sameBusiness(a, b) {
+    const ta = nameTokens(a), tb = nameTokens(b);
+    if ([...ta, ...tb].every((w) => PLACE.has(w))) {
+      // Only place words left ("Burlington Family Chiropractic" vs "Burlington Chiropractic Clinic"):
+      // compare full names, ignoring just suffixes like Clinic or PLC.
+      const full = (n) => [...new Set(clean(n).filter((w) => !SUFFIX.has(w)))].sort().join(' ');
+      return full(a) === full(b);
+    }
+    const [small, big] = ta.length <= tb.length ? [ta, tb] : [tb, ta];
+    const shared = small.filter((w) => big.some((x) => sameWord(w, x)));
+    const distinct = shared.filter((w) => !PLACE.has(w));
+    if (shared.length === small.length && small.length === big.length) return true;
+    if (shared.length === small.length && distinct.length) return true;
+    return distinct.length >= 2;
+  }
+  function assignKeys(mentions) {
+    const groups = {};
+    for (const m of mentions) {
+      const list = (groups[m.category] = groups[m.category] || []);
+      const hit = list.find((g) => g.names.some((n) => sameBusiness(m.business, n)));
+      if (hit) { hit.names.push(m.business); m.key = hit.key; continue; }
+      m.key = nameTokens(m.business).join(' ') + '#' + list.length;
+      list.push({ key: m.key, names: [m.business] });
+    }
+  }
+  const categoryFor = (p) => (CATEGORY_RULES.find(([re]) => re.test(p.toLowerCase())) || [null, 'Other'])[1];
+  function promptId(p) { let h = 5381; for (const c of p.trim().toLowerCase()) h = ((h * 33) ^ c.charCodeAt(0)) >>> 0; return 'p' + h.toString(16); }
+
+  function build(rows) {
+    const mentions = [], sources = [], answers = [], seen = new Set();
+    for (const r of rows) {
+      const prompt = String(r.prompt || '').trim();
+      const engine = ENGINES[String(r.engine || '').trim()];
+      if (!prompt || !engine) continue;
+      const runDate = String(r.run_date || '').slice(0, 10);
+      // Sheets may drop the leading zero ("6:18"); pad it so runs sort correctly.
+      const runId = (String(r.run_id || '').trim() || runDate).replace(/ (\d):/, ' 0$1:');
+      const pid = promptId(prompt);
+      const k = runId + '|' + pid + '|' + engine;
+      if (seen.has(k)) continue;
+      seen.add(k);
+      const category = categoryFor(prompt);
+      const names = String(r.businesses || '').split('\n').map((l) => l.replace(/^\s*\d+\.\s*/, '').trim()).filter(Boolean);
+      const domains = [...new Set(String(r.sources || '').split(',').map((d) => d.trim()).filter(Boolean))];
+      answers.push({ run_id: runId, run_date: runDate, prompt_id: pid, category, prompt, label: prompt, engine,
+        businesses_named: names.length, sources_cited: domains.length });
+      names.forEach((b, i) => mentions.push({ run_id: runId, prompt_id: pid, category, label: prompt, engine, position: i + 1, business: b }));
+      domains.forEach((d) => sources.push({ run_id: runId, prompt_id: pid, category, label: prompt, domain: d }));
+    }
+    assignKeys(mentions);
+    return { mentions, sources, answers };
+  }
+
+  function finish() { if (dash._fn) dash._fn(); }
+
+  fetch('data.json', { cache: 'no-store' })
+    .then((r) => (r.ok ? r.json() : Promise.reject(new Error('HTTP ' + r.status))))
+    .then((data) => {
+      const t = build(data.rows || []);
+      for (const n of ['mentions', 'sources', 'answers']) dash._store[n] = { status: 'ok', data: t[n] };
+      for (const [name, def] of dash._calcs) {
+        dash._store[name] = { status: 'ok', data: def.fn(...def.inputs.map((n) => dash._store[n].data)) };
+      }
+      const sub = document.querySelector('.av-sub');
+      if (sub && data.city) sub.textContent = `${data.city}, ${data.state} · Gemini answering with live web search vs. from memory`;
+      const upd = document.getElementById('updated');
+      if (upd && data.generated_at) upd.textContent = 'Updated ' + new Date(data.generated_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+      finish();
+    })
+    .catch((e) => {
+      console.error('Could not load data.json:', e);
+      for (const n of ['mentions', 'sources', 'answers', ...dash._calcs.map(([n]) => n)]) dash._store[n] = { status: 'error' };
+      finish();
+    });
+})();
+</script>
+</body>
+</html>
